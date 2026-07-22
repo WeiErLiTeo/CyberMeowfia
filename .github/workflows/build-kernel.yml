@@ -1,5 +1,13 @@
 name: Build OPPO MT6893 Kernel
 on: push
+env:
+  KERNEL_REPO: oppo-source/android_kernel_oppo_mt6893
+  KERNEL_BRANCH: oppo/mt6893_14_14.0.0_reno8_5g
+  VENDOR_REPO: dabao1955/android_kernel_OPPO_PEQM00
+  VENDOR_BRANCH: oplus_vendor
+  DEFCONFIG: k6893v1_64_k419_defconfig
+  ARCH: arm64
+  CROSS_COMPILE: aarch64-linux-gnu-
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -9,14 +17,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git wget tar xz-utils make gcc flex bison \
             libssl-dev libelf-dev bc python3 cpio rsync \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            clang-14 lld-14 llvm-14
       - name: Checkout kernel
         uses: actions/checkout@v4
         with:
-          repository: oppo-source/android_kernel_oppo_mt6893
-          ref: oppo/mt6893_14_14.0.0_reno8_5g
+          repository: ${{ env.KERNEL_REPO }}
+          ref: ${{ env.KERNEL_BRANCH }}
           path: kernel
           fetch-depth: 1
-      - name: Show .config
+      - name: Clone vendor
         working-directory: kernel
-        run: ls -la
+        run: |
+          set -e
+          echo "Clone vendor source..."
+          git clone https://github.com/${{ env.VENDOR_REPO }} \
+            -b ${{ env.VENDOR_BRANCH }} vendor --depth=1
+          echo "Done. vendor/ contents:"
+          ls -la vendor/
