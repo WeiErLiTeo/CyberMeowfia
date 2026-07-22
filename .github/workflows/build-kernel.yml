@@ -1,7 +1,5 @@
 name: Build OPPO MT6893 Kernel
-on:
-  push:
-  workflow_dispatch:
+on: push
 
 env:
   KERNEL_REPO: oppo-source/android_kernel_oppo_mt6893
