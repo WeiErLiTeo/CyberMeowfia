@@ -1,0 +1,7 @@
+name: Test
+on: push
+jobs:
+  t:
+    runs-on: ubuntu-22.04
+    steps:
+      - run: echo ok
