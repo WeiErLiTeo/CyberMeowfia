@@ -1,0 +1,46 @@
+name: Build OPPO MT6893 Kernel
+on: push
+env:
+  KERNEL_REPO: oppo-source/android_kernel_oppo_mt6893
+  KERNEL_BRANCH: oppo/mt6893_14_14.0.0_reno8_5g
+  VENDOR_REPO: dabao1955/android_kernel_OPPO_PEQM00
+  VENDOR_BRANCH: oplus_vendor
+  DEFCONFIG: k6893v1_64_k419_defconfig
+  ARCH: arm64
+  CROSS_COMPILE: aarch64-linux-gnu-
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget tar xz-utils make gcc flex bison \
+            libssl-dev libelf-dev bc python3 cpio rsync \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            clang-14 lld-14 llvm-14
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.KERNEL_REPO }}
+          ref: ${{ env.KERNEL_BRANCH }}
+          path: kernel
+          fetch-depth: 1
+      - name: Clone vendor
+        working-directory: kernel
+        run: |
+          git clone https://github.com/${{ env.VENDOR_REPO }} \
+            -b ${{ env.VENDOR_BRANCH }} vendor --depth=1
+          if [ -d vendor/oplus/kernel_4.19/audio ]; then
+            cp -r vendor/oplus/kernel_4.19/audio/* sound/soc/codecs/ 2>/dev/null || true
+          fi
+      - name: Build
+        working-directory: kernel
+        run: |
+          make ARCH=${{ env.ARCH }} ${{ env.DEFCONFIG }}
+          make ARCH=${{ env.ARCH }} CROSS_COMPILE=${{ env.CROSS_COMPILE }} -j$(nproc)
+      - name: Extract symbols
+        if: success()
+        working-directory: kernel
+        run: |
+          nm vmlinux | grep -E " (ashmem|configfs|splice_read|noop_llseek|init_task|root_task_group|selinux_enforcing|security_hook_heads|kmalloc_caches|anon_pipe_buf|nfulnl|logger|bootid|boot_id|loggers|ashmem_misc)\b" | sort
