@@ -34,29 +34,47 @@ jobs:
         working-directory: kernel
         run: |
           set -e
-          # Find all broken symlinks (pointing to vendor/oplus or similar)
-          echo "=== Finding broken symlinks ==="
-          find . -type l -xtype l 2>/dev/null | while read link; do
-            target=$(readlink "$link")
-            echo "Broken link: $link -> $target"
-            # Create target directory structure
-            dir="$PWD/$(dirname "$link")/$target"
-            mkdir -p "$dir"
-            # If it's a directory symlink, create a stub Kconfig if parent dir has Kconfig sources
-            parent_kconfig=$(dirname "$PWD/$link")/Kconfig
-            if [ -f "$parent_kconfig" ] || [ -f "$(dirname "$PWD/$link")/Kconfig" ]; then
-              touch "$dir/Kconfig" 2>/dev/null || true
-            fi
-            touch "$dir/Makefile" 2>/dev/null || true
+          echo "=== Fixing all OPPO vendor symlinks ==="
+          # Find all symlinks that point to ../../vendor/oplus or similar
+          # and create stub target directories
+          find . -type l -name '*' | while read link; do
+            target=$(readlink "$link" 2>/dev/null || echo "")
+            [ -z "$target" ] && continue
+            # Only care about symlinks pointing to vendor/ or oplus/ paths
+            case "$target" in
+              *vendor/oplus*|*vendor/mediatek*|*oplus*)
+                echo "Fix: $link -> $target"
+                # Resolve target relative to link's directory
+                dir="$(cd "$(dirname "$link")" && pwd)/$target"
+                dir="$(realpath -m "$dir" 2>/dev/null || echo "$dir")"
+                mkdir -p "$dir"
+                # Create stub files for Kconfig and Makefile sources
+                # Check if parent dir has Kconfig references
+                if [ -f "$(dirname "$link")/Kconfig" ] || \
+                   grep -q "$(basename "$link")" "$(dirname "$(dirname "$link")")/Kconfig" 2>/dev/null; then
+                  touch "$dir/Kconfig"
+                fi
+                if [ -f "$(dirname "$link")/Makefile" ] || \
+                   grep -q "$(basename "$link")" "$(dirname "$(dirname "$link")")/Makefile" 2>/dev/null; then
+                  touch "$dir/Makefile"
+                fi
+                # Always create Kconfig and Makefile for safety
+                touch "$dir/Kconfig" 2>/dev/null || true
+                touch "$dir/Makefile" 2>/dev/null || true
+                # If this is a file symlink (not dir), create stub file
+                if [ ! -d "$link" ] && [ ! -d "$dir" ]; then
+                  touch "$dir" 2>/dev/null || true
+                fi
+                ;;
+            esac
           done
-
-          # Also ensure common vendor paths exist
-          mkdir -p vendor/oplus/kernel/oplus_performance/sched_assist
-          touch vendor/oplus/kernel/oplus_performance/sched_assist/Kconfig
-          touch vendor/oplus/kernel/oplus_performance/sched_assist/Makefile
-          mkdir -p vendor/oplus/kernel/oplus_performance/sigkill_diagnosis
-          touch vendor/oplus/kernel/oplus_performance/sigkill_diagnosis/Kconfig
-          touch vendor/oplus/kernel/oplus_performance/sigkill_diagnosis/Makefile
+          echo "=== All symlinks fixed ==="
+          # Ensure known vendor paths exist (belt and suspenders)
+          for d in sched_assist klockopt sigkill_diagnosis; do
+            mkdir -p "vendor/oplus/kernel/oplus_performance/$d"
+            touch "vendor/oplus/kernel/oplus_performance/$d/Kconfig"
+            touch "vendor/oplus/kernel/oplus_performance/$d/Makefile"
+          done
 
           # Preprocess defconfig: remove #ifdef / #else / #endif / #CONFIG_ lines
           echo "=== Preprocessing defconfig ==="
