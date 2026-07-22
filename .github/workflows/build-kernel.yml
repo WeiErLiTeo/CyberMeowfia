@@ -30,51 +30,52 @@ jobs:
           path: kernel
           fetch-depth: 1
 
-      - name: Fix OPPO vendor symlinks and defconfig
+      - name: Fix OPPO vendor symlinks and missing Kconfig sources
         working-directory: kernel
         run: |
           set -e
-          echo "=== Fixing all OPPO vendor symlinks ==="
-          # Find all symlinks that point to ../../vendor/oplus or similar
-          # and create stub target directories
-          find . -type l -name '*' | while read link; do
-            target=$(readlink "$link" 2>/dev/null || echo "")
+          echo "=== Step 1: Resolve all vendor symlinks ==="
+          # Resolve every symlink at any depth
+          find . -type l -print 2>/dev/null | while read link; do
+            target="$(readlink "$link" 2>/dev/null || true)"
             [ -z "$target" ] && continue
-            # Only care about symlinks pointing to vendor/ or oplus/ paths
+            # Only care about symlinks pointing outside the tree
             case "$target" in
-              *vendor/oplus*|*vendor/mediatek*|*oplus*)
+              *vendor/oplus*|*vendor/mediatek*|*vendor/*|*/oplus/*)
                 echo "Fix: $link -> $target"
-                # Resolve target relative to link's directory
+                # Normalize: resolve relative to link's dir
                 dir="$(cd "$(dirname "$link")" && pwd)/$target"
-                dir="$(realpath -m "$dir" 2>/dev/null || echo "$dir")"
                 mkdir -p "$dir"
-                # Create stub files for Kconfig and Makefile sources
-                # Check if parent dir has Kconfig references
-                if [ -f "$(dirname "$link")/Kconfig" ] || \
-                   grep -q "$(basename "$link")" "$(dirname "$(dirname "$link")")/Kconfig" 2>/dev/null; then
-                  touch "$dir/Kconfig"
-                fi
-                if [ -f "$(dirname "$link")/Makefile" ] || \
-                   grep -q "$(basename "$link")" "$(dirname "$(dirname "$link")")/Makefile" 2>/dev/null; then
-                  touch "$dir/Makefile"
-                fi
-                # Always create Kconfig and Makefile for safety
                 touch "$dir/Kconfig" 2>/dev/null || true
                 touch "$dir/Makefile" 2>/dev/null || true
-                # If this is a file symlink (not dir), create stub file
-                if [ ! -d "$link" ] && [ ! -d "$dir" ]; then
-                  touch "$dir" 2>/dev/null || true
-                fi
                 ;;
             esac
           done
-          echo "=== All symlinks fixed ==="
-          # Ensure known vendor paths exist (belt and suspenders)
-          for d in sched_assist klockopt sigkill_diagnosis; do
-            mkdir -p "vendor/oplus/kernel/oplus_performance/$d"
-            touch "vendor/oplus/kernel/oplus_performance/$d/Kconfig"
-            touch "vendor/oplus/kernel/oplus_performance/$d/Makefile"
+          echo "=== Step 2: Create stubs for all Kconfig 'source' targets that dont exist ==="
+          # Find all 'source "..."' references in Kconfig files and create stubs
+          grep -r --include='Kconfig*' '^source ' . 2>/dev/null | \
+            sed 's/.*source "\(.*\)".*/\1/' | sort -u | while read kpath; do
+            # Check if the sourced file or its parent dir exists
+            if [ ! -f "$kpath" ] && [ ! -e "$kpath" ]; then
+              dir="$(dirname "$kpath")"
+              file="$(basename "$kpath")"
+              mkdir -p "$dir"
+              touch "$kpath"
+              echo "Created stub: $kpath"
+            fi
           done
+          echo "=== Step 3: Preprocess defconfig ==="
+          sed -i \
+            -e '/^#ifdef /d' \
+            -e '/^#ifndef /d' \
+            -e '/^#else/d' \
+            -e '/^#endif/d' \
+            -e '/^\/\//d' \
+            -e '/^#\*\*/d' \
+            -e '/^#end/d' \
+            -e '/^#CONFIG/s/^#CONFIG/# CONFIG/' \
+            arch/arm64/configs/${{ env.DEFCONFIG }}
+          echo "Done."
 
           # Preprocess defconfig: remove #ifdef / #else / #endif / #CONFIG_ lines
           echo "=== Preprocessing defconfig ==="
