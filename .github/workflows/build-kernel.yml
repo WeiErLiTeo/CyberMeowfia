@@ -1,7 +1,7 @@
 name: Build OPPO MT6893 Kernel
 on:
   push:
-    branches: [ main ]
+    branches: [ 'main' ]
   workflow_dispatch:
 
 env:
