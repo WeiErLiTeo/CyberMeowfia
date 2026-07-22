@@ -5,6 +5,8 @@ on:
 env:
   KERNEL_REPO: oppo-source/android_kernel_oppo_mt6893
   KERNEL_BRANCH: oppo/mt6893_14_14.0.0_reno8_5g
+  VENDOR_REPO: dabao1955/android_kernel_OPPO_PEQM00
+  VENDOR_BRANCH: oplus_vendor
   DEFCONFIG: k6893v1_64_k419_defconfig
   ARCH: arm64
   CROSS_COMPILE: aarch64-linux-gnu-
@@ -30,55 +32,30 @@ jobs:
           path: kernel
           fetch-depth: 1
 
-      - name: Fix OPPO vendor symlinks and missing Kconfig sources
+      - name: Clone OPPO vendor source
         working-directory: kernel
         run: |
           set -e
-          echo "=== Step 1: Resolve all vendor symlinks ==="
-          # Resolve every symlink at any depth
+          echo "=== Clone vendor source (oplus + mediatek) ==="
+          git clone https://github.com/${{ env.VENDOR_REPO }} \
+            -b ${{ env.VENDOR_BRANCH }} vendor --depth=1
+          echo "=== Copy vendor audio to kernel tree ==="
+          if [ -d vendor/oplus/kernel_4.19/audio ]; then
+            cp -r vendor/oplus/kernel_4.19/audio/* sound/soc/codecs/ 2>/dev/null || true
+            echo "Copied vendor audio codecs"
+          fi
+          echo "=== Verify symlinks resolve ==="
           find . -type l -print 2>/dev/null | while read link; do
-            target="$(readlink "$link" 2>/dev/null || true)"
-            [ -z "$target" ] && continue
-            # Only care about symlinks pointing outside the tree
-            case "$target" in
-              *vendor/oplus*|*vendor/mediatek*|*vendor/*|*/oplus/*)
-                echo "Fix: $link -> $target"
-                # Normalize: resolve relative to link's dir
-                dir="$(cd "$(dirname "$link")" && pwd)/$target"
-                mkdir -p "$dir"
-                touch "$dir/Kconfig" 2>/dev/null || true
-                touch "$dir/Makefile" 2>/dev/null || true
-                ;;
-            esac
-          done
-          echo "=== Step 2: Create stubs for all Kconfig 'source' targets that dont exist ==="
-          # Find all 'source "..."' references in Kconfig files and create stubs
-          grep -r --include='Kconfig*' '^source ' . 2>/dev/null | \
-            sed 's/.*source "\(.*\)".*/\1/' | sort -u | while read kpath; do
-            # Check if the sourced file or its parent dir exists
-            if [ ! -f "$kpath" ] && [ ! -e "$kpath" ]; then
-              dir="$(dirname "$kpath")"
-              file="$(basename "$kpath")"
-              mkdir -p "$dir"
-              touch "$kpath"
-              echo "Created stub: $kpath"
+            if [ ! -e "$link" ]; then
+              echo "WARNING: Broken symlink: $link -> $(readlink "$link")"
             fi
           done
-          echo "=== Step 3: Preprocess defconfig ==="
-          sed -i \
-            -e '/^#ifdef /d' \
-            -e '/^#ifndef /d' \
-            -e '/^#else/d' \
-            -e '/^#endif/d' \
-            -e '/^\/\//d' \
-            -e '/^#\*\*/d' \
-            -e '/^#end/d' \
-            -e '/^#CONFIG/s/^#CONFIG/# CONFIG/' \
-            arch/arm64/configs/${{ env.DEFCONFIG }}
           echo "Done."
 
-          # Preprocess defconfig: remove #ifdef / #else / #endif / #CONFIG_ lines
-          echo "=== Preprocessing defconfig ==="
+      - name: Preprocess defconfig
+        working-directory: kernel
+        run: |
+          echo "=== Preprocessing defconfig (remove #ifdef blocks) ==="
           sed -i \
             -e '/^#ifdef /d' \
             -e '/^#ifndef /d' \
@@ -88,9 +65,8 @@ jobs:
             -e '/^#\*\*/d' \
             -e '/^#end/d' \
             -e '/^#CONFIG/s/^#CONFIG/# CONFIG/' \
-            -e '/^#CONFIG/s/^#CONFIG/# CONFIG/' \
             arch/arm64/configs/${{ env.DEFCONFIG }}
-          echo "=== Defconfig after preprocessing ==="
+          echo "=== Defconfig (non-comment lines) ==="
           grep -v '^#' arch/arm64/configs/${{ env.DEFCONFIG }} | grep -v '^$' | head -30
 
       - name: Configure kernel
@@ -142,28 +118,70 @@ jobs:
         run: |
           nm vmlinux | sort > ../nm_sorted.txt 2>/dev/null || true
 
-      - name: Extract relevant exploit symbols
+      - name: Extract all exploit symbol offsets
         working-directory: kernel
         run: |
-          {
-            echo "# Relevant Kernel Symbol Offsets for CVE-2026-43499"
-            echo "# Generated: $(date -u)"
-            echo "# Kernel: ${{ env.KERNEL_REPO }} branch ${{ env.KERNEL_BRANCH }}"
-            echo "# Defconfig: ${{ env.DEFCONFIG }}"
-            echo ""
-            for sym in init_task kmalloc_caches security_hook_heads ashmem_fops; do
-              addr=$(nm vmlinux 2>/dev/null | grep -E " $sym\$" | head -1 | awk '{print $1}')
-              if [ -n "$addr" ]; then
-                echo "$sym = 0x$addr"
-              else
-                echo "$sym = NOT_FOUND"
-              fi
-            done
-            echo ""
-            echo "# --- Full symbol listing ---"
-            grep -E '\b(init_task|kmalloc_caches|security_hook_heads|ashmem_fops)\b' nm_sorted.txt 2>/dev/null || true
-          } > ../relevant_symbols.txt
-          cat ../relevant_symbols.txt
+          KIMAGE_TEXT_BASE=0xffffff8008000000
+          cat > ../symbol_offsets.txt << 'HEADER'
+# =============================================================================
+# SYMBOL OFFSETS for oppo-pgbm10 target.h
+# Generated from built vmlinux at $(date -u)
+# Offsets relative to KIMAGE_TEXT_BASE (0xffffff8008000000)
+# Replace 0x00000000ULL /* [NEED VALUE] */ with these values
+# =============================================================================
+HEADER
+          # Primary symbol lookup
+          for sym in \
+            ashmem_fops ashmem_ioctl ashmem_compat_ioctl \
+            ashmem_mmap ashmem_open ashmem_release ashmem_show_fdinfo \
+            configfs_read_iter configfs_bin_write_iter copy_splice_read \
+            noop_llseek init_task root_task_group selinux_enforcing \
+            security_hook_heads kmalloc_caches anon_pipe_buf_ops
+          do
+            addr=$(nm vmlinux 2>/dev/null | grep -E " $sym\$" | head -1 | awk '{print $1}')
+            if [ -n "$addr" ]; then
+              offset=$(( 0x$addr - KIMAGE_TEXT_BASE ))
+              printf "%-45s 0x%08xULL\n" "#define ${sym}_OFF" "$offset" >> ../symbol_offsets.txt
+            else
+              echo "// ${sym}_OFF -> NOT_FOUND in vmlinux" >> ../symbol_offsets.txt
+            fi
+          done
+          # ashmem_misc + offsetof(miscdevice.fops) = ashmem_misc + 0x10
+          addr=$(nm vmlinux 2>/dev/null | grep -E " ashmem_misc\$" | head -1 | awk '{print $1}')
+          if [ -n "$addr" ]; then
+            misc_addr=$(( 0x$addr ))
+            fops_addr=$(( misc_addr + 0x10 ))
+            offset=$(( fops_addr - KIMAGE_TEXT_BASE ))
+            printf "%-45s 0x%08xULL  // ashmem_misc + 0x10\n" "#define ashmem_misc_fops_OFF" "$offset" >> ../symbol_offsets.txt
+            misc_offset=$(( misc_addr - KIMAGE_TEXT_BASE ))
+            printf "%-45s 0x%08xULL  // raw ashmem_misc\n" "#define ashmem_misc_OFF" "$misc_offset" >> ../symbol_offsets.txt
+          else
+            echo "// ashmem_misc -> NOT_FOUND" >> ../symbol_offsets.txt
+          fi
+          # KASLR slide symbols (__start_rodata relative)
+          for sym in nfulnl_logger random_boot_id_data sysctl_bootid; do
+            addr=$(nm vmlinux 2>/dev/null | grep -E " $sym\$" | head -1 | awk '{print $1}')
+            if [ -n "$addr" ]; then
+              offset=$(( 0x$addr - KIMAGE_TEXT_BASE ))
+              printf "%-45s 0x%08xULL\n" "#define slide_${sym}_OFF" "$offset" >> ../symbol_offsets.txt
+            else
+              echo "// slide_${sym}_OFF -> NOT_FOUND" >> ../symbol_offsets.txt
+            fi
+          done
+          # loggers_0_1: try various names
+          for sym in loggers nfulnl_logger_type loggers_0_1; do
+            addr=$(nm vmlinux 2>/dev/null | grep -E " $sym\$" | head -1 | awk '{print $1}')
+            if [ -n "$addr" ]; then
+              offset=$(( 0x$addr - KIMAGE_TEXT_BASE ))
+              printf "%-45s 0x%08xULL  // logged symbol as '$sym'\n" "#define slide_loggers_0_1_OFF" "$offset" >> ../symbol_offsets.txt
+              break
+            fi
+          done
+          cat ../symbol_offsets.txt
+          echo ""
+          echo "=== Context: nearby symbols ==="
+          grep -E '\b(ashmem|configfs|splice_read|noop_llseek|init_task|root_task_group|selinux_enforcing|security_hook_heads|kmalloc_caches|anon_pipe_buf|nfulnl|logger|bootid|boot_id|loggers)\b' \
+            nm_sorted.txt 2>/dev/null | head -50
 
       - name: Upload vmlinux
         uses: actions/upload-artifact@v4
@@ -186,9 +204,9 @@ jobs:
           path: nm_sorted.txt
           if-no-files-found: warn
 
-      - name: Upload relevant symbols
+      - name: Upload symbol offsets
         uses: actions/upload-artifact@v4
         with:
-          name: relevant_symbols.txt
-          path: relevant_symbols.txt
+          name: symbol_offsets.txt
+          path: symbol_offsets.txt
           if-no-files-found: warn
