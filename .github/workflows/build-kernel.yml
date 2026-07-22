@@ -1,0 +1,22 @@
+name: Build OPPO MT6893 Kernel
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget tar xz-utils make gcc flex bison \
+            libssl-dev libelf-dev bc python3 cpio rsync \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Checkout kernel
+        uses: actions/checkout@v4
+        with:
+          repository: oppo-source/android_kernel_oppo_mt6893
+          ref: oppo/mt6893_14_14.0.0_reno8_5g
+          path: kernel
+          fetch-depth: 1
+      - name: Show .config
+        working-directory: kernel
+        run: ls -la
