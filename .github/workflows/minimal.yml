@@ -4,4 +4,12 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     steps:
-      - run: echo Hello World
+      - name: Checkout external
+        uses: actions/checkout@v4
+        with:
+          repository: oppo-source/android_kernel_oppo_mt6893
+          ref: oppo/mt6893_14_14.0.0_reno8_5g
+          path: kernel
+          fetch-depth: 1
+      - name: List
+        run: ls -la kernel/
